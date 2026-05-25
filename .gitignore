@@ -13,3 +13,14 @@ __v0_jsx-dev-runtime.ts
 node_modules
 .next/
 .DS_Store
+# הגדרות סביבה ומפתחות סודיים
+.env
+.env.local
+
+# תיקיות מערכת וכלי פיתוח (ששוקלות המון ולא צריכות לעלות)
+node_modules/
+dist/
+build/
+
+# קבצי מערכת הפעלה
+.DS_Store
