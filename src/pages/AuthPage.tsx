@@ -132,7 +132,7 @@ function AuthPage() {
         }
 
         if (authData.user) {
-          const { error: profileError } = await supabase.from('profiles').insert([{
+          const { error: profileError } = await supabase.from('profiles').upsert([{
             id: authData.user.id,
             full_name: fullName.trim(),
             role: selectedRole,

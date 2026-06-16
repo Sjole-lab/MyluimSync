@@ -136,11 +136,18 @@ function UploadCenterPage() {
     }
   }
 
-  const coursesByDept: Record<string, typeof courses> = {}
+  const getYearLabel = (year: number | null) => {
+    if (!year) return ''
+    return ['שנה א׳', 'שנה ב׳', 'שנה ג׳', 'שנה ד׳'][year - 1] || `שנה ${year}`
+  }
+
+  const coursesByGroup: Record<string, typeof courses> = {}
   courses.forEach(c => {
-    const dept = c.department || 'כללי'
-    if (!coursesByDept[dept]) coursesByDept[dept] = []
-    coursesByDept[dept].push(c)
+    const groupName = c.faculty
+      ? (c.specialization ? `${c.faculty} - ${c.specialization}` : c.faculty)
+      : (c.department || 'כללי')
+    if (!coursesByGroup[groupName]) coursesByGroup[groupName] = []
+    coursesByGroup[groupName].push(c)
   })
 
   const myMaterials = materials.filter(m => m.uploaded_by === currentUserId)
@@ -166,9 +173,13 @@ function UploadCenterPage() {
             <label htmlFor="course-select">קורס אקדמי</label>
             <select id="course-select" value={selectedCourseId} onChange={e => setSelectedCourseId(e.target.value)}>
               <option value="">-- בחר קורס --</option>
-              {Object.entries(coursesByDept).map(([dept, items]) => (
-                <optgroup key={dept} label={dept}>
-                  {items.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+              {Object.entries(coursesByGroup).map(([group, items]) => (
+                <optgroup key={group} label={group}>
+                  {items.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.title} {c.year_of_study ? `(${getYearLabel(c.year_of_study)})` : ''}
+                    </option>
+                  ))}
                 </optgroup>
               ))}
             </select>
