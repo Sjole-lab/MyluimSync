@@ -132,19 +132,24 @@ function AuthPage() {
         }
 
         if (authData.user) {
-          const { error: profileError } = await supabase.from('profiles').upsert([{
-            id: authData.user.id,
-            full_name: fullName.trim(),
-            role: selectedRole,
-            faculty,
-            specialization,
-            year_of_study: Number(yearOfStudy),
-          }])
-          if (profileError) {
-            setMsg({ text: 'החשבון נוצר אך שמירת הפרופיל נכשלה. פנה לתמיכה.', type: 'error' })
-            return
+          if (authData.session) {
+            // התחברות מיידית ללא צורך באישור מייל
+            const { error: profileError } = await supabase.from('profiles').upsert([{
+              id: authData.user.id,
+              full_name: fullName.trim(),
+              role: selectedRole,
+              faculty,
+              specialization,
+              year_of_study: Number(yearOfStudy),
+            }])
+            if (profileError) {
+              console.warn('Non-blocking profile upsert error (handled by DB trigger):', profileError)
+            }
+            setMsg({ text: 'ברוך הבא! החשבון נוצר בהצלחה — מתחבר...', type: 'success' })
+          } else {
+            // נדרש אישור מייל — הטריגר ב-DB כבר יצר את הפרופיל
+            setMsg({ text: 'החשבון נוצר בהצלחה! נשלח אליך אימייל לאישור החשבון. אנא כנס לתיבת הדואר שלך ולחץ על הקישור כדי שתוכל להתחבר.', type: 'success' })
           }
-          setMsg({ text: 'ברוך הבא! החשבון נוצר בהצלחה — מתחבר...', type: 'success' })
         } else {
           setMsg({ text: 'נשלח אימייל אישור. בדוק את תיבת הדואר שלך ולחץ על הקישור.', type: 'success' })
         }
