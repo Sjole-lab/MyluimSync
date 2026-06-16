@@ -3,6 +3,44 @@ import Button from '../components/Button/Button'
 import { supabase } from '../supabase'
 import './AuthPage.css'
 
+// ============================================================
+// מבנה הפקולטות — אונו (קריה האקדמית אונו)
+// ============================================================
+const ONO_FACULTIES: Record<string, string[]> = {
+  'מנהל עסקים': [
+    'מערכות מידע',
+    'חשבונאות',
+    'שיווק ופרסום',
+    'מימון ושוק ההון',
+    'ניהול משאבי אנוש',
+    'ניהול כללי',
+  ],
+  'משפטים': [
+    'עריכת דין',
+    'לימודי משפט (לא משפטנים)',
+  ],
+  'מדעי הרוח והחברה': [
+    'פסיכולוגיה',
+    'תקשורת שיווקית',
+    'חינוך וחברה',
+    'מדעי המחשב',
+    'מוסיקה רב-תחומית',
+  ],
+  'מקצועות הבריאות': [
+    'סיעוד',
+    'ריפוי בעיסוק',
+    'הפרעות בתקשורת',
+    'ספורטתרפיה',
+  ],
+}
+
+const YEAR_OPTIONS = [
+  { value: 1, label: 'שנה א׳' },
+  { value: 2, label: 'שנה ב׳' },
+  { value: 3, label: 'שנה ג׳' },
+  { value: 4, label: 'שנה ד׳' },
+]
+
 function translateSupabaseError(msg: string): string {
   if (msg.includes('User already registered') || msg.includes('already registered'))
     return 'כתובת האימייל הזו כבר רשומה במערכת. לחץ על "כבר רשום? היכנס כאן" כדי להתחבר.'
@@ -26,9 +64,20 @@ function AuthPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
+  const [faculty, setFaculty] = useState('')
+  const [specialization, setSpecialization] = useState('')
+  const [yearOfStudy, setYearOfStudy] = useState<number | ''>('')
   const [isRegistering, setIsRegistering] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [msg, setMsg] = useState({ text: '', type: '' })
+
+  // רשימת התמחויות לפי הפקולטה שנבחרה
+  const specializationOptions = faculty ? (ONO_FACULTIES[faculty] ?? []) : []
+
+  const handleFacultyChange = (val: string) => {
+    setFaculty(val)
+    setSpecialization('') // אפס התמחות בכל פעם שמחליפים פקולטה
+  }
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -37,12 +86,25 @@ function AuthPage() {
 
     try {
       if (isRegistering) {
+        // ולידציות הרשמה
         if (!selectedRole) {
           setMsg({ text: 'אנא בחר תפקיד — חייל מילואים או סטודנט תומך.', type: 'error' })
           return
         }
         if (!fullName.trim()) {
           setMsg({ text: 'אנא הכנס את שמך המלא.', type: 'error' })
+          return
+        }
+        if (!faculty) {
+          setMsg({ text: 'אנא בחר פקולטה.', type: 'error' })
+          return
+        }
+        if (!specialization) {
+          setMsg({ text: 'אנא בחר התמחות.', type: 'error' })
+          return
+        }
+        if (!yearOfStudy) {
+          setMsg({ text: 'אנא בחר שנת לימוד.', type: 'error' })
           return
         }
         if (password.length < 6) {
@@ -58,9 +120,14 @@ function AuthPage() {
         }
 
         if (authData.user) {
-          const { error: profileError } = await supabase.from('profiles').insert([
-            { id: authData.user.id, full_name: fullName.trim(), role: selectedRole }
-          ])
+          const { error: profileError } = await supabase.from('profiles').insert([{
+            id: authData.user.id,
+            full_name: fullName.trim(),
+            role: selectedRole,
+            faculty,
+            specialization,
+            year_of_study: Number(yearOfStudy),
+          }])
           if (profileError) {
             setMsg({ text: 'החשבון נוצר אך שמירת הפרופיל נכשלה. פנה לתמיכה.', type: 'error' })
             return
@@ -87,6 +154,9 @@ function AuthPage() {
     setIsRegistering(!isRegistering)
     setMsg({ text: '', type: '' })
     setSelectedRole(null)
+    setFaculty('')
+    setSpecialization('')
+    setYearOfStudy('')
   }
 
   return (
@@ -115,8 +185,10 @@ function AuthPage() {
             </div>
           )}
 
+          {/* ========== שדות הרשמה בלבד ========== */}
           {isRegistering && (
             <>
+              {/* שם מלא */}
               <div className="input-group">
                 <label htmlFor="fullname">שם מלא</label>
                 <input
@@ -129,6 +201,7 @@ function AuthPage() {
                 />
               </div>
 
+              {/* בחירת תפקיד */}
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500, fontSize: '14px' }}>
                   בחר את תפקידך
@@ -152,9 +225,70 @@ function AuthPage() {
                   </button>
                 </div>
               </div>
+
+              {/* ---- פקולטה ---- */}
+              <div className="input-group">
+                <label htmlFor="faculty">
+                  פקולטה
+                  <span style={{ color: '#ef4444', marginRight: '4px' }}>*</span>
+                </label>
+                <select
+                  id="faculty"
+                  required
+                  value={faculty}
+                  onChange={e => handleFacultyChange(e.target.value)}
+                >
+                  <option value="">-- בחר פקולטה --</option>
+                  {Object.keys(ONO_FACULTIES).map(f => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* ---- התמחות (מתעדכן לפי פקולטה) ---- */}
+              <div className="input-group">
+                <label htmlFor="specialization">
+                  התמחות
+                  <span style={{ color: '#ef4444', marginRight: '4px' }}>*</span>
+                </label>
+                <select
+                  id="specialization"
+                  required
+                  value={specialization}
+                  onChange={e => setSpecialization(e.target.value)}
+                  disabled={!faculty}
+                >
+                  <option value="">
+                    {faculty ? '-- בחר התמחות --' : 'בחר פקולטה תחילה'}
+                  </option>
+                  {specializationOptions.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* ---- שנת לימוד ---- */}
+              <div className="input-group">
+                <label htmlFor="year-of-study">
+                  שנת לימוד
+                  <span style={{ color: '#ef4444', marginRight: '4px' }}>*</span>
+                </label>
+                <select
+                  id="year-of-study"
+                  required
+                  value={yearOfStudy}
+                  onChange={e => setYearOfStudy(Number(e.target.value))}
+                >
+                  <option value="">-- בחר שנה --</option>
+                  {YEAR_OPTIONS.map(y => (
+                    <option key={y.value} value={y.value}>{y.label}</option>
+                  ))}
+                </select>
+              </div>
             </>
           )}
 
+          {/* ========== שדות משותפים (כניסה + הרשמה) ========== */}
           <div className="input-group">
             <label htmlFor="email">אימייל</label>
             <input

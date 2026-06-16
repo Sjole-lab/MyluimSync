@@ -1,66 +1,117 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import Button from '../components/Button/Button'
 import { supabase } from '../supabase'
 import './StudentDashboardPage.css'
 
-function StudentDashboardPage() {
+interface Props {
+  onOpenCourseModal: () => void
+}
+
+function StudentDashboardPage({ onOpenCourseModal }: Props) {
   const [materials, setMaterials] = useState<any[]>([])
+  const [selectedCourseIds, setSelectedCourseIds] = useState<string[]>([])
   const [feedbackText, setFeedbackText] = useState('')
   const [selectedMaterialId, setSelectedMaterialId] = useState('')
   const [rating, setRating] = useState(5)
   const [studentName, setStudentName] = useState('סטודנט במילואים')
+  const [userProfile, setUserProfile] = useState<{ faculty?: string; specialization?: string; year_of_study?: number } | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [absenceStart, setAbsenceStart] = useState('')
   const [absenceEnd, setAbsenceEnd] = useState('')
   const [absenceSaved, setAbsenceSaved] = useState(false)
   const [feedbackSuccess, setFeedbackSuccess] = useState(false)
+  const [activeCourseFilter, setActiveCourseFilter] = useState<string>('all')
+  const [selectedCourseNames, setSelectedCourseNames] = useState<{id: string, title: string}[]>([])
+
+  const loadData = useCallback(async () => {
+    setIsLoading(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { setIsLoading(false); return }
+
+    // טען פרופיל
+    const { data: prof } = await supabase
+      .from('profiles')
+      .select('full_name, absence_start, absence_end, faculty, specialization, year_of_study')
+      .eq('id', user.id)
+      .single()
+
+    if (prof?.full_name) setStudentName(prof.full_name)
+    if (prof?.absence_start) setAbsenceStart(prof.absence_start)
+    if (prof?.absence_end) setAbsenceEnd(prof.absence_end)
+    setUserProfile({
+      faculty: prof?.faculty,
+      specialization: prof?.specialization,
+      year_of_study: prof?.year_of_study,
+    })
+
+    // טען קורסים שנבחרו
+    const { data: userCourses } = await supabase
+      .from('user_courses')
+      .select('course_id, courses(id, title)')
+      .eq('user_id', user.id)
+
+    const courseIds = userCourses?.map((uc: any) => uc.course_id) ?? []
+    setSelectedCourseIds(courseIds)
+    setSelectedCourseNames(
+      userCourses?.map((uc: any) => ({ id: uc.course_id, title: uc.courses?.title ?? '' })) ?? []
+    )
+
+    // טען חומרים — רק מהקורסים שנבחרו (אם בחר קורסים)
+    let materialsQuery = supabase
+      .from('materials')
+      .select('*, courses(title)')
+      .order('created_at', { ascending: false })
+
+    if (courseIds.length > 0) {
+      materialsQuery = materialsQuery.in('course_id', courseIds)
+    }
+
+    const { data: materialsData } = await materialsQuery
+    setMaterials(materialsData || [])
+    setIsLoading(false)
+  }, [])
 
   useEffect(() => {
-    async function loadStudentViewData() {
-      setIsLoading(true)
-      const { data: materialsData } = await supabase
-        .from('materials')
-        .select('*, courses(title)')
-        .order('created_at', { ascending: false })
-
-      setMaterials(materialsData || [])
-
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user) {
-        const { data: prof } = await supabase.from('profiles').select('full_name, absence_start, absence_end').eq('id', user.id).single()
-        if (prof?.full_name) setStudentName(prof.full_name)
-        if (prof?.absence_start) setAbsenceStart(prof.absence_start)
-        if (prof?.absence_end) setAbsenceEnd(prof.absence_end)
-      }
-      setIsLoading(false)
-    }
-    loadStudentViewData()
-  }, [])
+    loadData()
+    // האזן לאירוע עדכון קורסים מה-Modal
+    const handler = () => loadData()
+    window.addEventListener('courses-updated', handler)
+    return () => window.removeEventListener('courses-updated', handler)
+  }, [loadData])
 
   const handleSaveAbsence = async () => {
     if (!absenceStart || !absenceEnd) return
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
-      const { error } = await supabase.from('profiles').update({ absence_start: absenceStart, absence_end: absenceEnd }).eq('id', user.id)
+      const { error } = await supabase.from('profiles')
+        .update({ absence_start: absenceStart, absence_end: absenceEnd })
+        .eq('id', user.id)
       if (!error) { setAbsenceSaved(true); setTimeout(() => setAbsenceSaved(false), 3000) }
     }
   }
 
-  const filteredMaterials = absenceStart && absenceEnd
-    ? materials.filter(m => {
-        const matDate = new Date(m.created_at)
-        const start = new Date(absenceStart)
-        const end = new Date(absenceEnd)
-        end.setHours(23, 59, 59)
-        return matDate >= start && matDate <= end
-      })
-    : materials
+  // סינון לפי תקופת היעדרות + קורס ספציפי
+  const filteredMaterials = materials.filter(m => {
+    const matchAbsence = !(absenceStart && absenceEnd) || (() => {
+      const matDate = new Date(m.created_at)
+      const start = new Date(absenceStart)
+      const end = new Date(absenceEnd)
+      end.setHours(23, 59, 59)
+      return matDate >= start && matDate <= end
+    })()
+
+    const matchCourse = activeCourseFilter === 'all' || m.course_id === activeCourseFilter
+
+    return matchAbsence && matchCourse
+  })
 
   const handleDownloadFile = async (materialId: string, fileUrl: string) => {
     try {
       await supabase.rpc('increment_download', { material_id: materialId })
       window.open(fileUrl, '_blank')
-      setMaterials(prev => prev.map(m => m.id === materialId ? { ...m, downloads_count: (m.downloads_count || 0) + 1 } : m))
+      setMaterials(prev => prev.map(m =>
+        m.id === materialId ? { ...m, downloads_count: (m.downloads_count || 0) + 1 } : m
+      ))
     } catch (err) {
       console.error('Error handling download count:', err)
     }
@@ -72,7 +123,7 @@ function StudentDashboardPage() {
 
     try {
       const { error } = await supabase.from('material_feedbacks').insert([
-        { material_id: selectedMaterialId, user_name: studentName, comment: feedbackText, rating: rating }
+        { material_id: selectedMaterialId, user_name: studentName, comment: feedbackText, rating }
       ])
       if (error) throw error
       setFeedbackSuccess(true)
@@ -84,18 +135,57 @@ function StudentDashboardPage() {
     }
   }
 
+  const yearLabel = userProfile?.year_of_study
+    ? ['', 'שנה א׳', 'שנה ב׳', 'שנה ג׳', 'שנה ד׳'][userProfile.year_of_study] ?? ''
+    : ''
+
   return (
     <div className="dashboard-page">
+
+      {/* Banner ברוך הבא */}
       <section className="welcome-banner">
         <h1 className="welcome-title">שלום, {studentName}</h1>
-        <p className="welcome-text">מרכז השלמת התוכן האישי שלך. הגדר את תקופת המילואים שלך כדי לסנן את החומרים הרלוונטיים.</p>
+        <p className="welcome-text">מרכז השלמת התוכן האישי שלך — מציג חומרים לפי הקורסים שבחרת.</p>
+        {userProfile?.faculty && (
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
+            <span style={{ background: 'rgba(255,255,255,0.2)', borderRadius: '999px', padding: '4px 14px', fontSize: '13px', fontWeight: 600 }}>
+              🏫 {userProfile.faculty}
+            </span>
+            {userProfile.specialization && (
+              <span style={{ background: 'rgba(255,255,255,0.2)', borderRadius: '999px', padding: '4px 14px', fontSize: '13px', fontWeight: 600 }}>
+                🎯 {userProfile.specialization}
+              </span>
+            )}
+            {yearLabel && (
+              <span style={{ background: 'rgba(255,255,255,0.2)', borderRadius: '999px', padding: '4px 14px', fontSize: '13px', fontWeight: 600 }}>
+                📅 {yearLabel}
+              </span>
+            )}
+          </div>
+        )}
       </section>
 
-      {/* בחירת תקופת היעדרות */}
+      {/* כפתור ערוך קורסים */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
+        <button
+          onClick={onOpenCourseModal}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '6px',
+            background: 'none', border: '1.5px solid var(--color-secondary)',
+            color: 'var(--color-secondary)', borderRadius: '10px',
+            padding: '7px 16px', fontSize: '13px', fontWeight: 600,
+            cursor: 'pointer', transition: 'all 0.2s',
+          }}
+          onMouseOver={e => (e.currentTarget.style.background = '#eff6ff')}
+          onMouseOut={e => (e.currentTarget.style.background = 'none')}
+        >
+          ✏️ ערוך קורסים שלי ({selectedCourseIds.length})
+        </button>
+      </div>
+
+      {/* סינון תקופת היעדרות */}
       <section className="card" style={{ marginBottom: '20px' }}>
-        <h2 className="section-title" style={{ marginBottom: '12px' }}>
-          📅 הגדרת תקופת שירות המילואים
-        </h2>
+        <h2 className="section-title" style={{ marginBottom: '12px' }}>📅 הגדרת תקופת שירות המילואים</h2>
         <p style={{ fontSize: '14px', color: '#64748b', marginBottom: '16px' }}>
           בחר את תאריכי ההיעדרות שלך — המערכת תסנן ותציג רק את החומרים שהועלו בתקופה זו.
         </p>
@@ -143,46 +233,104 @@ function StudentDashboardPage() {
         </div>
       </section>
 
+      {/* פילטר קורסים */}
+      {selectedCourseNames.length > 0 && (
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px', alignItems: 'center' }}>
+          <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>סנן לפי קורס:</span>
+          <button
+            onClick={() => setActiveCourseFilter('all')}
+            style={{
+              padding: '5px 14px', borderRadius: '999px', border: '1.5px solid',
+              borderColor: activeCourseFilter === 'all' ? 'var(--color-primary)' : 'var(--color-border)',
+              background: activeCourseFilter === 'all' ? 'var(--color-primary)' : '#fff',
+              color: activeCourseFilter === 'all' ? '#fff' : '#64748b',
+              fontSize: '12px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
+            }}
+          >הכל</button>
+          {selectedCourseNames.map(c => (
+            <button
+              key={c.id}
+              onClick={() => setActiveCourseFilter(c.id)}
+              style={{
+                padding: '5px 14px', borderRadius: '999px', border: '1.5px solid',
+                borderColor: activeCourseFilter === c.id ? 'var(--color-primary)' : 'var(--color-border)',
+                background: activeCourseFilter === c.id ? 'var(--color-primary)' : '#fff',
+                color: activeCourseFilter === c.id ? '#fff' : '#64748b',
+                fontSize: '12px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
+                maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}
+              title={c.title}
+            >
+              {c.title}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="dashboard-grid-layout">
+        {/* רשימת חומרים */}
         <section className="courses-section card">
           <h2 className="section-title" style={{ marginBottom: '15px' }}>
             {absenceStart && absenceEnd
               ? `חומרים מהתקופה ${new Date(absenceStart).toLocaleDateString('he-IL')} – ${new Date(absenceEnd).toLocaleDateString('he-IL')}`
-              : 'כל חומרי הלימוד הזמינים עבורך'}
+              : selectedCourseIds.length > 0
+              ? `חומרי הלימוד בקורסים שלך (${filteredMaterials.length})`
+              : 'כל חומרי הלימוד הזמינים'}
           </h2>
+
           {isLoading ? (
             <p>טוען חומרי עזר מהשרת...</p>
+          ) : selectedCourseIds.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '30px', color: '#64748b' }}>
+              <p style={{ fontSize: '15px', marginBottom: '12px' }}>עדיין לא בחרת קורסים</p>
+              <Button variant="primary" onClick={onOpenCourseModal}>בחר קורסים עכשיו</Button>
+            </div>
           ) : filteredMaterials.length === 0 ? (
             <p style={{ color: '#64748b', fontSize: '14px' }}>
               {absenceStart && absenceEnd
                 ? 'לא הועלו חומרים בתקופה זו. נסה לשנות את הטווח.'
-                : 'טרם הועלו חומרים.'}
+                : 'טרם הועלו חומרים לקורסים שבחרת.'}
             </p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {filteredMaterials.map(mat => (
-                <div key={mat.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px', border: '1px solid var(--color-border)', borderRadius: '10px', backgroundColor: 'var(--color-background)', gap: '12px' }}>
+                <div
+                  key={mat.id}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '14px', border: '1px solid var(--color-border)',
+                    borderRadius: '10px', backgroundColor: 'var(--color-background)', gap: '12px',
+                  }}
+                >
                   <div style={{ flex: 1 }}>
                     <strong style={{ display: 'block', marginBottom: '4px' }}>{mat.title}</strong>
                     <div style={{ fontSize: '12px', color: '#64748b', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                      {mat.courses?.title && <span>קורס: {mat.courses.title}</span>}
+                      {mat.courses?.title && <span>📖 {mat.courses.title}</span>}
                       <span>הועלה: {new Date(mat.created_at).toLocaleDateString('he-IL')}</span>
                       <span>הורדות: {mat.downloads_count || 0}</span>
                     </div>
                   </div>
-                  <Button variant="secondary" onClick={() => handleDownloadFile(mat.id, mat.file_url)}>הורד 📥</Button>
+                  <Button variant="secondary" onClick={() => handleDownloadFile(mat.id, mat.file_url)}>
+                    הורד 📥
+                  </Button>
                 </div>
               ))}
             </div>
           )}
         </section>
 
+        {/* טופס פידבק */}
         <section className="card">
           <h2 className="section-title" style={{ marginBottom: '15px' }}>השארת פידבק לתומך</h2>
           <form onSubmit={handleSendFeedback} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div className="input-group">
               <label htmlFor="select-mat">עבור איזה חומר?</label>
-              <select id="select-mat" required value={selectedMaterialId} onChange={(e) => setSelectedMaterialId(e.target.value)}>
+              <select
+                id="select-mat"
+                required
+                value={selectedMaterialId}
+                onChange={(e) => setSelectedMaterialId(e.target.value)}
+              >
                 <option value="">-- בחר חומר --</option>
                 {materials.map(m => <option key={m.id} value={m.id}>{m.title}</option>)}
               </select>
@@ -199,7 +347,14 @@ function StudentDashboardPage() {
             </div>
             <div className="input-group">
               <label htmlFor="feedback-area">הערה לתומך</label>
-              <textarea id="feedback-area" required value={feedbackText} onChange={(e) => setFeedbackText(e.target.value)} placeholder="כתוב כאן..." style={{ padding: '10px', borderRadius: '8px', border: '1px solid var(--color-border)', minHeight: '80px', fontFamily: 'inherit', resize: 'vertical' }}></textarea>
+              <textarea
+                id="feedback-area"
+                required
+                value={feedbackText}
+                onChange={(e) => setFeedbackText(e.target.value)}
+                placeholder="כתוב כאן..."
+                style={{ padding: '10px', borderRadius: '8px', border: '1px solid var(--color-border)', minHeight: '80px', fontFamily: 'inherit', resize: 'vertical' }}
+              />
             </div>
             <Button type="submit" variant="primary">שלח פידבק 🚀</Button>
             {feedbackSuccess && (

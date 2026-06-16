@@ -4,6 +4,7 @@ import { supabase } from './supabase'
 import Navbar from './components/Navbar/Navbar'
 import Footer from './components/Footer/Footer'
 import BottomNav from './components/BottomNav/BottomNav'
+import CourseSelectionModal from './components/CourseSelectionModal/CourseSelectionModal'
 import AuthPage from './pages/AuthPage'
 import StudentDashboardPage from './pages/StudentDashboardPage'
 import SupporterDashboardPage from './pages/SupporterDashboardPage'
@@ -11,34 +12,65 @@ import UploadCenterPage from './pages/UploadCenterPage'
 import CourseEmptyStatePage from './pages/CourseEmptyStatePage'
 import LegalPage from './pages/LegalPage'
 
+interface UserProfile {
+  role: 'miluimnik' | 'supporter' | null
+  faculty: string | null
+  specialization: string | null
+  year_of_study: number | null
+}
+
 function App() {
   const [session, setSession] = useState<any>(undefined) // undefined = טרם נבדק
-  const [role, setRole] = useState<'miluimnik' | 'supporter' | null>(null)
-  const fetchingRef = useRef<string | null>(null) // מונע קריאה כפולה ל-fetchUserRole
+  const [profile, setProfile] = useState<UserProfile>({
+    role: null, faculty: null, specialization: null, year_of_study: null
+  })
+  const [showCourseModal, setShowCourseModal] = useState(false)
+  const fetchingRef = useRef<string | null>(null) // מונע קריאה כפולה
 
   useEffect(() => {
-    // onAuthStateChange מפעיל INITIAL_SESSION מיד עם הטעינה — לא צריך getSession בנפרד
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession)
 
       if (!newSession) {
-        setRole(null)
+        setProfile({ role: null, faculty: null, specialization: null, year_of_study: null })
+        setShowCourseModal(false)
         fetchingRef.current = null
         return
       }
 
       const userId = newSession.user.id
-      if (fetchingRef.current === userId) return // כבר מושך role לאותו יוזר
+      if (fetchingRef.current === userId) return
       fetchingRef.current = userId
 
+      // טעינת פרופיל + בדיקת קורסים שנבחרו
       supabase
         .from('profiles')
-        .select('role')
+        .select('role, faculty, specialization, year_of_study')
         .eq('id', userId)
         .single()
-        .then(({ data, error }) => {
-          if (error) console.error('Error fetching role:', error)
-          setRole(data?.role ?? null)
+        .then(async ({ data, error }) => {
+          if (error) { console.error('Error fetching profile:', error); return }
+
+          const userProfile: UserProfile = {
+            role: data?.role ?? null,
+            faculty: data?.faculty ?? null,
+            specialization: data?.specialization ?? null,
+            year_of_study: data?.year_of_study ?? null,
+          }
+          setProfile(userProfile)
+
+          // בדוק אם חייל מילואים שלא בחר קורסים עדיין
+          if (userProfile.role === 'miluimnik') {
+            const { data: existingCourses } = await supabase
+              .from('user_courses')
+              .select('id')
+              .eq('user_id', userId)
+              .limit(1)
+
+            if (!existingCourses || existingCourses.length === 0) {
+              setShowCourseModal(true)
+            }
+          }
         })
     })
 
@@ -55,11 +87,11 @@ function App() {
   }
 
   // יש session אבל role עדיין נטען — ממתינים לפני ניווט
-  const roleLoading = session && role === null
+  const roleLoading = session && profile.role === null
 
   return (
     <div className="app" style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-      {session && <Navbar userRole={role} />}
+      {session && <Navbar userRole={profile.role} />}
 
       <main className="main-content" style={{ flex: 1, paddingTop: session ? '70px' : '0' }}>
         {roleLoading ? (
@@ -72,27 +104,27 @@ function App() {
               path="/"
               element={
                 !session ? <AuthPage /> :
-                role === 'supporter' ? <Navigate to="/supporter-dashboard" replace /> :
+                profile.role === 'supporter' ? <Navigate to="/supporter-dashboard" replace /> :
                 <Navigate to="/student-dashboard" replace />
               }
             />
 
             <Route
               path="/student-dashboard"
-              element={session && role === 'miluimnik' ? <StudentDashboardPage /> : <Navigate to="/" replace />}
+              element={session && profile.role === 'miluimnik' ? <StudentDashboardPage onOpenCourseModal={() => setShowCourseModal(true)} /> : <Navigate to="/" replace />}
             />
             <Route
               path="/course/empty"
-              element={session && role === 'miluimnik' ? <CourseEmptyStatePage /> : <Navigate to="/" replace />}
+              element={session && profile.role === 'miluimnik' ? <CourseEmptyStatePage /> : <Navigate to="/" replace />}
             />
 
             <Route
               path="/supporter-dashboard"
-              element={session && role === 'supporter' ? <SupporterDashboardPage /> : <Navigate to="/" replace />}
+              element={session && profile.role === 'supporter' ? <SupporterDashboardPage /> : <Navigate to="/" replace />}
             />
             <Route
               path="/upload-center"
-              element={session && role === 'supporter' ? <UploadCenterPage /> : <Navigate to="/" replace />}
+              element={session && profile.role === 'supporter' ? <UploadCenterPage /> : <Navigate to="/" replace />}
             />
 
             <Route path="/legal/:type" element={<LegalPage />} />
@@ -101,7 +133,23 @@ function App() {
         )}
       </main>
 
-      {session && <BottomNav userRole={role} />}
+      {/* פופאפ בחירת קורסים — מוצג מעל הכל */}
+      {showCourseModal && session && (
+        <CourseSelectionModal
+          userId={session.user.id}
+          faculty={profile.faculty}
+          specialization={profile.specialization}
+          yearOfStudy={profile.year_of_study}
+          onClose={() => setShowCourseModal(false)}
+          onSaved={() => {
+            setShowCourseModal(false)
+            // רענון הדף כדי לטעון חומרים מסוננים
+            window.dispatchEvent(new CustomEvent('courses-updated'))
+          }}
+        />
+      )}
+
+      {session && <BottomNav userRole={profile.role} />}
       {session && <Footer />}
     </div>
   )
