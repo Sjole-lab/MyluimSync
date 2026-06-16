@@ -12,6 +12,8 @@ function StudentDashboardPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [absenceStart, setAbsenceStart] = useState('')
   const [absenceEnd, setAbsenceEnd] = useState('')
+  const [absenceSaved, setAbsenceSaved] = useState(false)
+  const [feedbackSuccess, setFeedbackSuccess] = useState(false)
 
   useEffect(() => {
     async function loadStudentViewData() {
@@ -39,7 +41,8 @@ function StudentDashboardPage() {
     if (!absenceStart || !absenceEnd) return
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
-      await supabase.from('profiles').update({ absence_start: absenceStart, absence_end: absenceEnd }).eq('id', user.id)
+      const { error } = await supabase.from('profiles').update({ absence_start: absenceStart, absence_end: absenceEnd }).eq('id', user.id)
+      if (!error) { setAbsenceSaved(true); setTimeout(() => setAbsenceSaved(false), 3000) }
     }
   }
 
@@ -72,9 +75,10 @@ function StudentDashboardPage() {
         { material_id: selectedMaterialId, user_name: studentName, comment: feedbackText, rating: rating }
       ])
       if (error) throw error
-      alert('הפידבק שלך נשלח בהצלחה לתומך האקדמי!')
+      setFeedbackSuccess(true)
       setFeedbackText('')
       setSelectedMaterialId('')
+      setTimeout(() => setFeedbackSuccess(false), 4000)
     } catch (err) {
       console.error('Error saving feedback:', err)
     }
@@ -119,6 +123,9 @@ function StudentDashboardPage() {
           <Button variant="accent" onClick={handleSaveAbsence} disabled={!absenceStart || !absenceEnd}>
             שמור תקופה
           </Button>
+          {absenceSaved && (
+            <span style={{ fontSize: '13px', color: 'var(--color-accent)', fontWeight: 600 }}>✅ נשמר!</span>
+          )}
           {absenceStart && absenceEnd && (
             <span style={{ fontSize: '14px', color: 'var(--color-accent)', fontWeight: 600 }}>
               נמצאו {filteredMaterials.length} חומרים בתקופה זו
@@ -195,6 +202,11 @@ function StudentDashboardPage() {
               <textarea id="feedback-area" required value={feedbackText} onChange={(e) => setFeedbackText(e.target.value)} placeholder="כתוב כאן..." style={{ padding: '10px', borderRadius: '8px', border: '1px solid var(--color-border)', minHeight: '80px', fontFamily: 'inherit', resize: 'vertical' }}></textarea>
             </div>
             <Button type="submit" variant="primary">שלח פידבק 🚀</Button>
+            {feedbackSuccess && (
+              <div style={{ padding: '10px', borderRadius: '8px', backgroundColor: '#dcfce7', color: '#15803d', fontSize: '14px', textAlign: 'center', border: '1px solid #86efac' }}>
+                ✅ הפידבק נשלח בהצלחה לתומך!
+              </div>
+            )}
           </form>
         </section>
       </div>
