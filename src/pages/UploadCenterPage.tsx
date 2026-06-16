@@ -71,9 +71,19 @@ function UploadCenterPage() {
               onChange={(e) => setSelectedCourseId(e.target.value)}
             >
               <option value="">-- בחר קורס מהרשימה --</option>
-              {courses.map(c => (
-                <option key={c.id} value={c.id}>{c.title}</option>
-              ))}
+              {(() => {
+                const byDept: Record<string, typeof courses> = {}
+                courses.forEach(c => {
+                  const dept = c.department || 'כללי'
+                  if (!byDept[dept]) byDept[dept] = []
+                  byDept[dept].push(c)
+                })
+                return Object.entries(byDept).map(([dept, items]) => (
+                  <optgroup key={dept} label={dept}>
+                    {items.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+                  </optgroup>
+                ))
+              })()}
             </select>
           </div>
 

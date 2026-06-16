@@ -29,9 +29,6 @@ function CourseEmptyStatePage() {
           <Link to="/student-dashboard">
             <Button variant="primary">חזרה ללוח הבקרה</Button>
           </Link>
-          <Link to="/upload-center">
-            <Button variant="secondary">לעבור להעלאת קבצים</Button>
-          </Link>
         </div>
       </div>
     </div>
