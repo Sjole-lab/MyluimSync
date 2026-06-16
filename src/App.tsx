@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { supabase } from './supabase'
 import Navbar from './components/Navbar/Navbar'
 import Footer from './components/Footer/Footer'
@@ -12,93 +12,93 @@ import CourseEmptyStatePage from './pages/CourseEmptyStatePage'
 import LegalPage from './pages/LegalPage'
 
 function App() {
-  const [session, setSession] = useState<any>(null)
+  const [session, setSession] = useState<any>(undefined) // undefined = טרם נבדק
   const [role, setRole] = useState<'miluimnik' | 'supporter' | null>(null)
-  const [loading, setLoading] = useState(true)
-  const location = useLocation()
+  const fetchingRef = useRef<string | null>(null) // מונע קריאה כפולה ל-fetchUserRole
 
   useEffect(() => {
-    // 1. בדיקת סשן נוכחי בעת טעינת האתר
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      if (session) fetchUserRole(session.user.id)
-      else setLoading(false)
-    })
+    // onAuthStateChange מפעיל INITIAL_SESSION מיד עם הטעינה — לא צריך getSession בנפרד
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession)
 
-    // 2. האזנה לשינויים במצב ההתחברות (התחברות/התנתקות)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      if (session) fetchUserRole(session.user.id)
-      else {
+      if (!newSession) {
         setRole(null)
-        setLoading(false)
+        fetchingRef.current = null
+        return
       }
+
+      const userId = newSession.user.id
+      if (fetchingRef.current === userId) return // כבר מושך role לאותו יוזר
+      fetchingRef.current = userId
+
+      supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', userId)
+        .single()
+        .then(({ data, error }) => {
+          if (error) console.error('Error fetching role:', error)
+          setRole(data?.role ?? null)
+        })
     })
 
     return () => subscription.unsubscribe()
   }, [])
 
-  const fetchUserRole = async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', userId)
-        .single()
-      
-      if (error) throw error
-      setRole(data?.role || null)
-    } catch (err) {
-      console.error('Error fetching role:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  if (loading) {
+  // טרם הגיעה תשובה מ-Supabase
+  if (session === undefined) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', direction: 'rtl', fontFamily: 'sans-serif' }}>
-        <h3>MyluimSync בודק חיבור מאובטח לענן...</h3>
+        <h3>MyluimSync טוען...</h3>
       </div>
     )
   }
 
+  // יש session אבל role עדיין נטען — ממתינים לפני ניווט
+  const roleLoading = session && role === null
+
   return (
     <div className="app" style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       {session && <Navbar userRole={role} />}
-      
+
       <main className="main-content" style={{ flex: 1, paddingTop: session ? '70px' : '0' }}>
-        <Routes>
-          {/* דף כניסה - אם מחובר, מנתב אוטומטית לפי תפקיד */}
-          <Route 
-            path="/" 
-            element={session ? (role === 'supporter' ? <Navigate to="/supporter-dashboard" /> : <Navigate to="/student-dashboard" />) : <AuthPage />} 
-          />
-          
-          {/* נתיבים ייעודיים לחייל מילואים בלבד */}
-          <Route 
-            path="/student-dashboard" 
-            element={session && role === 'miluimnik' ? <StudentDashboardPage /> : <Navigate to="/" />} 
-          />
-          <Route 
-            path="/course/empty" 
-            element={session && role === 'miluimnik' ? <CourseEmptyStatePage /> : <Navigate to="/" />} 
-          />
-          
-          {/* נתיבים ייעודיים לתומך אקדמי בלבד */}
-          <Route 
-            path="/supporter-dashboard" 
-            element={session && role === 'supporter' ? <SupporterDashboardPage /> : <Navigate to="/" />} 
-          />
-          <Route 
-            path="/upload-center" 
-            element={session && role === 'supporter' ? <UploadCenterPage /> : <Navigate to="/" />} 
-          />
-          
-          {/* נתיבים חוקיים ונגישים לכולם */}
-          <Route path="/legal/:type" element={<LegalPage />} />
-          <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
+        {roleLoading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh', direction: 'rtl', fontFamily: 'sans-serif' }}>
+            <h3>טוען פרופיל...</h3>
+          </div>
+        ) : (
+          <Routes>
+            <Route
+              path="/"
+              element={
+                !session ? <AuthPage /> :
+                role === 'supporter' ? <Navigate to="/supporter-dashboard" replace /> :
+                <Navigate to="/student-dashboard" replace />
+              }
+            />
+
+            <Route
+              path="/student-dashboard"
+              element={session && role === 'miluimnik' ? <StudentDashboardPage /> : <Navigate to="/" replace />}
+            />
+            <Route
+              path="/course/empty"
+              element={session && role === 'miluimnik' ? <CourseEmptyStatePage /> : <Navigate to="/" replace />}
+            />
+
+            <Route
+              path="/supporter-dashboard"
+              element={session && role === 'supporter' ? <SupporterDashboardPage /> : <Navigate to="/" replace />}
+            />
+            <Route
+              path="/upload-center"
+              element={session && role === 'supporter' ? <UploadCenterPage /> : <Navigate to="/" replace />}
+            />
+
+            <Route path="/legal/:type" element={<LegalPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        )}
       </main>
 
       {session && <BottomNav userRole={role} />}
