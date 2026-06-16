@@ -1,0 +1,11 @@
+.supporter-page {
+  padding: calc(var(--nav-height) + var(--spacing-lg)) var(--spacing-md) calc(var(--bottom-nav-height) + var(--spacing-xl));
+  max-width: 1200px;
+  margin: 0 auto;
+}
+@media (min-width: 768px) {
+  .supporter-page {
+    padding-top: calc(var(--nav-height) + var(--spacing-xl));
+    padding-bottom: var(--spacing-xl);
+  }
+}

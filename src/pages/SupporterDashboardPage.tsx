@@ -2,23 +2,30 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Button from '../components/Button/Button';
 import { supabase } from '../supabase';
+import './SupporterDashboardPage.css';
 
 function SupporterDashboardPage() {
   const [stats, setStats] = useState({ uploads: 0, totalDownloads: 0 });
   const [feedbacks, setFeedbacks] = useState<any[]>([]);
   const [materials, setMaterials] = useState<any[]>([]);
+  const [supporterName, setSupporterName] = useState('מתנדב אקדמי');
 
   useEffect(() => {
     async function loadSupporterData() {
-      const { data: mats } = await supabase
-        .from('materials')
-        .select('id, title, downloads_count, created_at, courses(title)')
-        .order('created_at', { ascending: false });
+      const { data: { user } } = await supabase.auth.getUser();
 
-      const { data: fbs } = await supabase
-        .from('material_feedbacks')
-        .select('*, materials(title, created_at)')
-        .order('created_at', { ascending: false });
+      const [{ data: mats }, { data: fbs }, { data: prof }] = await Promise.all([
+        supabase
+          .from('materials')
+          .select('id, title, downloads_count, created_at, courses(title)')
+          .eq('uploaded_by', user?.id)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('material_feedbacks')
+          .select('*, materials(title, created_at)')
+          .order('created_at', { ascending: false }),
+        supabase.from('profiles').select('full_name').eq('id', user?.id).single(),
+      ]);
 
       if (mats) {
         const totalDown = mats.reduce((sum: number, item: any) => sum + (item.downloads_count || 0), 0);
@@ -26,16 +33,17 @@ function SupporterDashboardPage() {
         setMaterials(mats);
       }
       if (fbs) setFeedbacks(fbs);
+      if (prof?.full_name) setSupporterName(prof.full_name);
     }
 
     loadSupporterData();
   }, []);
 
   return (
-    <div style={{ padding: '40px 20px', maxWidth: '1200px', margin: '0 auto' }}>
+    <div className="supporter-page">
       {/* כרטיס ברוך הבא */}
       <div className="card" style={{ background: 'linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%)', color: 'white', marginBottom: '30px' }}>
-        <h2>שלום, מתנדב אקדמי!</h2>
+        <h2>שלום, {supporterName}!</h2>
         <p>תודה על התרומה שלך לסטודנטים בחזית. הנה ההשפעה שלך עד כה:</p>
       </div>
 
