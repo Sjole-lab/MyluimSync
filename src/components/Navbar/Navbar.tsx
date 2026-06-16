@@ -37,6 +37,8 @@ function Navbar({ userRole }: NavbarProps) {
             </>
           )}
 
+          <Link to="/profile" className="nav-link" style={{ fontWeight: 600 }}>פרופיל אישי 👤</Link>
+
           <button onClick={handleLogout} className="nav-link logout-btn" style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'sans-serif' }}>
             התנתק מהמערכת 🚪
           </button>

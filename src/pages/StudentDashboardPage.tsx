@@ -23,6 +23,11 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
   const [activeCourseFilter, setActiveCourseFilter] = useState<string>('all')
   const [selectedCourseNames, setSelectedCourseNames] = useState<{id: string, title: string}[]>([])
 
+  // מעקב השלמת חומרים ותזכורות
+  const [completedMaterialIds, setCompletedMaterialIds] = useState<string[]>([])
+  const [remindersEnabled, setRemindersEnabled] = useState(true)
+  const [showReminderPopup, setShowReminderPopup] = useState(false)
+
   const loadData = useCallback(async () => {
     setIsLoading(true)
     const { data: { user } } = await supabase.auth.getUser()
@@ -31,18 +36,21 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
     // טען פרופיל
     const { data: prof } = await supabase
       .from('profiles')
-      .select('full_name, absence_start, absence_end, faculty, specialization, year_of_study')
+      .select('full_name, absence_start, absence_end, faculty, specialization, year_of_study, reminders_enabled')
       .eq('id', user.id)
-      .single()
+      .maybeSingle()
 
-    if (prof?.full_name) setStudentName(prof.full_name)
-    if (prof?.absence_start) setAbsenceStart(prof.absence_start)
-    if (prof?.absence_end) setAbsenceEnd(prof.absence_end)
-    setUserProfile({
-      faculty: prof?.faculty,
-      specialization: prof?.specialization,
-      year_of_study: prof?.year_of_study,
-    })
+    if (prof) {
+      if (prof.full_name) setStudentName(prof.full_name)
+      if (prof.absence_start) setAbsenceStart(prof.absence_start)
+      if (prof.absence_end) setAbsenceEnd(prof.absence_end)
+      setRemindersEnabled(prof.reminders_enabled !== false)
+      setUserProfile({
+        faculty: prof.faculty,
+        specialization: prof.specialization,
+        year_of_study: prof.year_of_study,
+      })
+    }
 
     // טען קורסים שנבחרו
     const { data: userCourses } = await supabase
@@ -60,6 +68,7 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
     let materialsQuery = supabase
       .from('materials')
       .select('*, courses(title)')
+      .order('lesson_date', { ascending: false })
       .order('created_at', { ascending: false })
 
     if (courseIds.length > 0) {
@@ -67,7 +76,54 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
     }
 
     const { data: materialsData } = await materialsQuery
-    setMaterials(materialsData || [])
+    const loadedMaterials = materialsData || []
+    setMaterials(loadedMaterials)
+
+    // טען חומרים שהושלמו
+    let completedIds: string[] = []
+    try {
+      const { data: completions, error: compError } = await supabase
+        .from('material_completions')
+        .select('material_id')
+        .eq('user_id', user.id)
+      
+      if (!compError && completions) {
+        completedIds = completions.map((c: any) => c.material_id)
+        setCompletedMaterialIds(completedIds)
+      }
+    } catch (e) {
+      console.warn('completions query failed:', e)
+    }
+
+    // בדיקת תזכורת פופאפ
+    const isRemindersOn = prof ? prof.reminders_enabled !== false : true
+    if (isRemindersOn && prof && prof.absence_start && prof.absence_end) {
+      const start = new Date(prof.absence_start)
+      const end = new Date(prof.absence_end)
+      end.setHours(23, 59, 59)
+
+      // חומרים שהחסיר
+      const missedMats = loadedMaterials.filter((m: any) => {
+        const matDate = new Date(m.lesson_date || m.created_at)
+        return matDate >= start && matDate <= end
+      })
+      const remainingCount = missedMats.length - missedMats.filter((m: any) => completedIds.includes(m.id)).length
+
+      if (remainingCount > 0) {
+        const lastVisit = localStorage.getItem('last_dashboard_visit')
+        const now = Date.now()
+        if (lastVisit) {
+          const hours = (now - Number(lastVisit)) / (1000 * 60 * 60)
+          if (hours >= 48) {
+            setShowReminderPopup(true)
+          }
+        }
+        localStorage.setItem('last_dashboard_visit', now.toString())
+      }
+    } else {
+      localStorage.setItem('last_dashboard_visit', Date.now().toString())
+    }
+
     setIsLoading(false)
   }, [])
 
@@ -93,7 +149,7 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
   // סינון לפי תקופת היעדרות + קורס ספציפי
   const filteredMaterials = materials.filter(m => {
     const matchAbsence = !(absenceStart && absenceEnd) || (() => {
-      const matDate = new Date(m.created_at)
+      const matDate = new Date(m.lesson_date || m.created_at)
       const start = new Date(absenceStart)
       const end = new Date(absenceEnd)
       end.setHours(23, 59, 59)
@@ -103,6 +159,16 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
     const matchCourse = activeCourseFilter === 'all' || m.course_id === activeCourseFilter
 
     return matchAbsence && matchCourse
+  })
+
+  // כל החומרים שפורסמו בתקופת המילואים (לצורך מדדי השלמה וסטטיסטיקה)
+  const allAbsenceMaterials = materials.filter(m => {
+    if (!absenceStart || !absenceEnd) return true
+    const matDate = new Date(m.lesson_date || m.created_at)
+    const start = new Date(absenceStart)
+    const end = new Date(absenceEnd)
+    end.setHours(23, 59, 59)
+    return matDate >= start && matDate <= end
   })
 
   const handleDownloadFile = (materialId: string, fileUrl: string) => {
@@ -129,6 +195,41 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
     }
   }
 
+  const toggleMaterialCompletion = async (materialId: string) => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    const isCompleted = completedMaterialIds.includes(materialId)
+    
+    // Optimistic UI update
+    setCompletedMaterialIds(prev =>
+      isCompleted ? prev.filter(id => id !== materialId) : [...prev, materialId]
+    )
+
+    try {
+      if (isCompleted) {
+        await supabase
+          .from('material_completions')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('material_id', materialId)
+      } else {
+        await supabase
+          .from('material_completions')
+          .insert({
+            user_id: user.id,
+            material_id: materialId
+          })
+      }
+    } catch (err) {
+      console.error('Error toggling material completion:', err)
+      // Rollback on error
+      setCompletedMaterialIds(prev =>
+        isCompleted ? [...prev, materialId] : prev.filter(id => id !== materialId)
+      )
+    }
+  }
+
   const handleSendFeedback = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedMaterialId || !feedbackText) return
@@ -145,6 +246,12 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
     } catch (err) {
       console.error('Error saving feedback:', err)
     }
+  }
+
+  const getCourseProgress = (courseId: string) => {
+    const courseMats = allAbsenceMaterials.filter(m => m.course_id === courseId)
+    const completed = courseMats.filter(m => completedMaterialIds.includes(m.id)).length
+    return { completed, total: courseMats.length }
   }
 
   const yearLabel = userProfile?.year_of_study
@@ -176,6 +283,57 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
           </div>
         )}
       </section>
+
+      {/* מדדי התקדמות והשלמה */}
+      {selectedCourseIds.length > 0 && (
+        <section className="card progress-section" style={{ marginBottom: '20px', padding: '20px' }}>
+          <h2 className="section-title" style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            📊 מדדי השלמת פערים אקדמיים
+          </h2>
+          <div className="progress-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+            <div className="stat-card" style={{ padding: '16px', borderRadius: '8px', border: '1px solid var(--color-border)', textAlign: 'center', backgroundColor: 'var(--color-background-alt)' }}>
+              <div className="stat-value" style={{ fontSize: '24px', fontWeight: 700, color: 'var(--color-primary)' }}>{allAbsenceMaterials.length}</div>
+              <div className="stat-label" style={{ fontSize: '13px', color: '#64748b', marginTop: '4px' }}>חומרים שהחסרת במילואים</div>
+            </div>
+            <div className="stat-card" style={{ padding: '16px', borderRadius: '8px', border: '1px solid var(--color-border)', textAlign: 'center', backgroundColor: 'var(--color-background-alt)' }}>
+              <div className="stat-value" style={{ fontSize: '24px', fontWeight: 700, color: '#16a34a' }}>
+                {allAbsenceMaterials.filter(m => completedMaterialIds.includes(m.id)).length}
+              </div>
+              <div className="stat-label" style={{ fontSize: '13px', color: '#64748b', marginTop: '4px' }}>חומרים שהשלמת</div>
+            </div>
+            <div className="stat-card" style={{ padding: '16px', borderRadius: '8px', border: '1px solid var(--color-border)', textAlign: 'center', backgroundColor: 'var(--color-background-alt)' }}>
+              <div className="stat-value" style={{ fontSize: '24px', fontWeight: 700, color: '#dc2626' }}>
+                {allAbsenceMaterials.length - allAbsenceMaterials.filter(m => completedMaterialIds.includes(m.id)).length}
+              </div>
+              <div className="stat-label" style={{ fontSize: '13px', color: '#64748b', marginTop: '4px' }}>חומרים שנותר להשלים</div>
+            </div>
+          </div>
+
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', fontWeight: 600, color: '#475569', marginBottom: '6px' }}>
+              <span>קצב השלמת החומרים:</span>
+              <span>
+                {allAbsenceMaterials.length > 0 
+                  ? Math.round((allAbsenceMaterials.filter(m => completedMaterialIds.includes(m.id)).length / allAbsenceMaterials.length) * 100) 
+                  : 0}% הושלמו
+              </span>
+            </div>
+            <div className="progress-bar-fill-wrapper" style={{ height: '8px', backgroundColor: '#e2e8f0', borderRadius: '999px', overflow: 'hidden' }}>
+              <div 
+                className="progress-bar-fill" 
+                style={{ 
+                  height: '100%',
+                  background: 'linear-gradient(90deg, #16a34a, #22c55e)',
+                  transition: 'width 0.4s ease-out',
+                  width: `${allAbsenceMaterials.length > 0 
+                    ? Math.round((allAbsenceMaterials.filter(m => completedMaterialIds.includes(m.id)).length / allAbsenceMaterials.length) * 100) 
+                    : 0}%` 
+                }} 
+              />
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* כפתור ערוך קורסים */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
@@ -259,23 +417,26 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
               fontSize: '12px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
             }}
           >הכל</button>
-          {selectedCourseNames.map(c => (
-            <button
-              key={c.id}
-              onClick={() => setActiveCourseFilter(c.id)}
-              style={{
-                padding: '5px 14px', borderRadius: '999px', border: '1.5px solid',
-                borderColor: activeCourseFilter === c.id ? 'var(--color-primary)' : 'var(--color-border)',
-                background: activeCourseFilter === c.id ? 'var(--color-primary)' : '#fff',
-                color: activeCourseFilter === c.id ? '#fff' : '#64748b',
-                fontSize: '12px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
-                maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}
-              title={c.title}
-            >
-              {c.title}
-            </button>
-          ))}
+          {selectedCourseNames.map(c => {
+            const { completed, total } = getCourseProgress(c.id)
+            return (
+              <button
+                key={c.id}
+                onClick={() => setActiveCourseFilter(c.id)}
+                style={{
+                  padding: '5px 14px', borderRadius: '999px', border: '1.5px solid',
+                  borderColor: activeCourseFilter === c.id ? 'var(--color-primary)' : 'var(--color-border)',
+                  background: activeCourseFilter === c.id ? 'var(--color-primary)' : '#fff',
+                  color: activeCourseFilter === c.id ? '#fff' : '#64748b',
+                  fontSize: '12px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
+                  maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}
+                title={`${c.title} (${completed}/${total} הושלמו)`}
+              >
+                {c.title} ({completed}/{total})
+              </button>
+            )
+          })}
         </div>
       )}
 
@@ -305,28 +466,51 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
             </p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {filteredMaterials.map(mat => (
-                <div
-                  key={mat.id}
-                  style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    padding: '14px', border: '1px solid var(--color-border)',
-                    borderRadius: '10px', backgroundColor: 'var(--color-background)', gap: '12px',
-                  }}
-                >
-                  <div style={{ flex: 1 }}>
-                    <strong style={{ display: 'block', marginBottom: '4px' }}>{mat.title}</strong>
-                    <div style={{ fontSize: '12px', color: '#64748b', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                      {mat.courses?.title && <span>📖 {mat.courses.title}</span>}
-                      <span>הועלה: {new Date(mat.created_at).toLocaleDateString('he-IL')}</span>
-                      <span>הורדות: {mat.downloads_count || 0}</span>
+              {filteredMaterials.map(mat => {
+                const isCompleted = completedMaterialIds.includes(mat.id)
+                return (
+                  <div
+                    key={mat.id}
+                    style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: '14px', border: '1px solid var(--color-border)',
+                      borderRadius: '10px', backgroundColor: isCompleted ? '#f0fdf4' : 'var(--color-background)', gap: '12px',
+                      borderColor: isCompleted ? '#bbf7d0' : 'var(--color-border)',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    {/* תיבת סימון להשלמה */}
+                    <div style={{ display: 'flex', alignItems: 'center', paddingLeft: '8px' }}>
+                      <input
+                        type="checkbox"
+                        checked={isCompleted}
+                        onChange={() => toggleMaterialCompletion(mat.id)}
+                        style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: '#16a34a' }}
+                        title={isCompleted ? "סומן כהושלם (לחץ לביטול)" : "סמן כהושלם"}
+                      />
                     </div>
+
+                    <div style={{ flex: 1 }}>
+                      <strong style={{ 
+                        display: 'block', 
+                        marginBottom: '4px',
+                        textDecoration: isCompleted ? 'line-through' : 'none',
+                        color: isCompleted ? '#16a34a' : 'var(--color-text)',
+                      }}>
+                        {mat.title}
+                      </strong>
+                      <div style={{ fontSize: '12px', color: '#64748b', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                        {mat.courses?.title && <span>📖 {mat.courses.title}</span>}
+                        <span>📅 שיעור: {new Date(mat.lesson_date || mat.created_at).toLocaleDateString('he-IL')}</span>
+                        <span>הורדות: {mat.downloads_count || 0}</span>
+                      </div>
+                    </div>
+                    <Button variant={isCompleted ? 'secondary' : 'primary'} onClick={() => handleDownloadFile(mat.id, mat.file_url)}>
+                      הורד 📥
+                    </Button>
                   </div>
-                  <Button variant="secondary" onClick={() => handleDownloadFile(mat.id, mat.file_url)}>
-                    הורד 📥
-                  </Button>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </section>
@@ -377,6 +561,47 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
           </form>
         </section>
       </div>
+
+      {/* פופאפ תזכורת אי-כניסה */}
+      {showReminderPopup && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.6)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 9999,
+          padding: '20px',
+          direction: 'rtl'
+        }}>
+          <div style={{
+            backgroundColor: '#ffffff',
+            borderRadius: '16px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            width: '100%',
+            maxWidth: '440px',
+            padding: '30px',
+            textAlign: 'center',
+            border: '1px solid #e2e8f0'
+          }}>
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔔</div>
+            <h3 style={{ fontSize: '20px', fontWeight: 700, color: 'var(--color-primary)', marginBottom: '12px' }}>לא שכחת את הלימודים?</h3>
+            <p style={{ fontSize: '15px', color: '#475569', lineHeight: '1.6', marginBottom: '24px' }}>
+              שלום <strong>{studentName}</strong>, שמנו לב שלא ביקרת במערכת כבר יומיים.
+              <br />
+              ממתינים לך עוד <strong>{allAbsenceMaterials.length - allAbsenceMaterials.filter(m => completedMaterialIds.includes(m.id)).length}</strong> חומרי לימוד להשלמה על מנת לצמצם את הפער האקדמי שנוצר.
+            </p>
+            <Button variant="primary" fullWidth onClick={() => setShowReminderPopup(false)}>
+              אני מתחיל ללמוד עכשיו! 📚
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

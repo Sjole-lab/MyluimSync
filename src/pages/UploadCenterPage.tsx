@@ -35,6 +35,7 @@ function UploadCenterPage() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [statusMsg, setStatusMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [lessonDate, setLessonDate] = useState(new Date().toISOString().split('T')[0])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadData = async () => {
@@ -95,6 +96,7 @@ function UploadCenterPage() {
         course_id: selectedCourseId,
         file_url: publicUrl,
         uploaded_by: currentUserId,
+        lesson_date: lessonDate,
       }])
 
       if (dbError) throw new Error(`שגיאת מסד נתונים: ${dbError.message}`)
@@ -104,6 +106,7 @@ function UploadCenterPage() {
       setMaterialTitle('')
       setSelectedCourseId('')
       setSelectedFile(null)
+      setLessonDate(new Date().toISOString().split('T')[0])
       if (fileInputRef.current) fileInputRef.current.value = ''
       await loadData()
 
@@ -194,6 +197,16 @@ function UploadCenterPage() {
               onChange={e => setMaterialTitle(e.target.value)}
             />
           </div>
+          <div className="input-group">
+            <label htmlFor="lesson-date">תאריך השיעור / הסיכום</label>
+            <input
+              id="lesson-date"
+              type="date"
+              required
+              value={lessonDate}
+              onChange={e => setLessonDate(e.target.value)}
+            />
+          </div>
         </div>
 
         <div
@@ -258,7 +271,7 @@ function UploadCenterPage() {
                   <strong>{mat.title}</strong>
                   <span className="material-meta">
                     {mat.courses?.title && <span>{mat.courses.title}</span>}
-                    <span>{new Date(mat.created_at).toLocaleDateString('he-IL')}</span>
+                    <span>📅 תאריך שיעור: {new Date(mat.lesson_date || mat.created_at).toLocaleDateString('he-IL')}</span>
                     <span>{mat.downloads_count || 0} הורדות</span>
                   </span>
                 </div>
@@ -290,7 +303,7 @@ function UploadCenterPage() {
                   <strong>{mat.title}</strong>
                   <span className="material-meta">
                     {mat.courses?.title && <span>{mat.courses.title}</span>}
-                    <span>{new Date(mat.created_at).toLocaleDateString('he-IL')}</span>
+                    <span>📅 תאריך שיעור: {new Date(mat.lesson_date || mat.created_at).toLocaleDateString('he-IL')}</span>
                     <span>{mat.downloads_count || 0} הורדות</span>
                   </span>
                 </div>

@@ -10,6 +10,7 @@ import StudentDashboardPage from './pages/StudentDashboardPage'
 import SupporterDashboardPage from './pages/SupporterDashboardPage'
 import UploadCenterPage from './pages/UploadCenterPage'
 import CourseEmptyStatePage from './pages/CourseEmptyStatePage'
+import ProfilePage from './pages/ProfilePage'
 import LegalPage from './pages/LegalPage'
 
 interface UserProfile {
@@ -29,6 +30,53 @@ function App() {
   const [showCourseModal, setShowCourseModal] = useState(false)
   const fetchingRef = useRef<string | null>(null) // מונע קריאה כפולה
 
+  const loadUserProfile = async (userId: string) => {
+    // טעינת פרופיל + בדיקת קורסים שנבחרו
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('role, faculty, specialization, year_of_study')
+      .eq('id', userId)
+      .maybeSingle()                           // לא זורק שגיאה אם אין שורה
+
+    if (error) {
+      console.error('Error fetching profile:', error)
+      return
+    }
+
+    if (!data) {
+      // פרופיל לא קיים — כנראה נוצר לפני שה-trigger/policy הוגדרו
+      console.warn('Profile not found for user:', userId)
+      setProfile({ role: null, faculty: null, specialization: null, year_of_study: null })
+      setProfileMissing(true)
+      setProfileLoaded(true)
+      fetchingRef.current = null
+      return
+    }
+
+    const userProfile: UserProfile = {
+      role: data?.role ?? null,
+      faculty: data?.faculty ?? null,
+      specialization: data?.specialization ?? null,
+      year_of_study: data?.year_of_study ?? null,
+    }
+    setProfile(userProfile)
+    setProfileLoaded(true)
+    setProfileMissing(false)
+
+    // בדוק אם חייל מילואים שלא בחר קורסים עדיין
+    if (userProfile.role === 'miluimnik') {
+      const { data: existingCourses } = await supabase
+        .from('user_courses')
+        .select('id')
+        .eq('user_id', userId)
+        .limit(1)
+
+      if (!existingCourses || existingCourses.length === 0) {
+        setShowCourseModal(true)
+      }
+    }
+  }
+
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession)
@@ -46,50 +94,23 @@ function App() {
       if (fetchingRef.current === userId) return
       fetchingRef.current = userId
 
-      // טעינת פרופיל + בדיקת קורסים שנבחרו
-      supabase
-        .from('profiles')
-        .select('role, faculty, specialization, year_of_study')
-        .eq('id', userId)
-        .maybeSingle()                           // לא זורק שגיאה אם אין שורה
-        .then(async ({ data, error }) => {
-          if (error) { console.error('Error fetching profile:', error); return }
-          if (!data) {
-            // פרופיל לא קיים — כנראה נוצר לפני שה-trigger/policy הוגדרו
-            console.warn('Profile not found for user:', userId)
-            setProfile({ role: null, faculty: null, specialization: null, year_of_study: null })
-            setProfileMissing(true)
-            setProfileLoaded(true)
-            fetchingRef.current = null
-            return
-          }
-
-          const userProfile: UserProfile = {
-            role: data?.role ?? null,
-            faculty: data?.faculty ?? null,
-            specialization: data?.specialization ?? null,
-            year_of_study: data?.year_of_study ?? null,
-          }
-          setProfile(userProfile)
-          setProfileLoaded(true)
-          setProfileMissing(false)
-
-          // בדוק אם חייל מילואים שלא בחר קורסים עדיין
-          if (userProfile.role === 'miluimnik') {
-            const { data: existingCourses } = await supabase
-              .from('user_courses')
-              .select('id')
-              .eq('user_id', userId)
-              .limit(1)
-
-            if (!existingCourses || existingCourses.length === 0) {
-              setShowCourseModal(true)
-            }
-          }
-        })
+      loadUserProfile(userId)
     })
 
-    return () => subscription.unsubscribe()
+    // האזנה לעדכון פרופיל
+    const handleProfileUpdate = () => {
+      supabase.auth.getUser().then(({ data }) => {
+        if (data?.user) {
+          loadUserProfile(data.user.id)
+        }
+      })
+    }
+    window.addEventListener('profile-updated', handleProfileUpdate)
+
+    return () => {
+      subscription.unsubscribe()
+      window.removeEventListener('profile-updated', handleProfileUpdate)
+    }
   }, [])
 
   // טרם הגיעה תשובה מסופרביס
@@ -161,6 +182,11 @@ function App() {
             <Route
               path="/upload-center"
               element={session && profile.role === 'supporter' ? <UploadCenterPage /> : <Navigate to="/" replace />}
+            />
+
+            <Route
+              path="/profile"
+              element={session ? <ProfilePage /> : <Navigate to="/" replace />}
             />
 
             <Route path="/legal/:type" element={<LegalPage />} />
