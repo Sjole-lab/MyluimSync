@@ -105,15 +105,27 @@ function StudentDashboardPage({ onOpenCourseModal }: Props) {
     return matchAbsence && matchCourse
   })
 
-  const handleDownloadFile = async (materialId: string, fileUrl: string) => {
+  const handleDownloadFile = (materialId: string, fileUrl: string) => {
+    // Increment download count in the background
+    supabase.rpc('increment_download', { material_id: materialId })
+      .then(() => {
+        setMaterials(prev => prev.map(m =>
+          m.id === materialId ? { ...m, downloads_count: (m.downloads_count || 0) + 1 } : m
+        ))
+      })
+      .catch(err => {
+        console.error('Error handling download count:', err)
+      })
+
+    // Open immediately to prevent browser popup blockers from blocking the tab
     try {
-      await supabase.rpc('increment_download', { material_id: materialId })
-      window.open(fileUrl, '_blank')
-      setMaterials(prev => prev.map(m =>
-        m.id === materialId ? { ...m, downloads_count: (m.downloads_count || 0) + 1 } : m
-      ))
-    } catch (err) {
-      console.error('Error handling download count:', err)
+      const newWindow = window.open(fileUrl, '_blank')
+      if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+        // Fallback if popup blocker still caught it
+        window.location.href = fileUrl
+      }
+    } catch (e) {
+      window.location.href = fileUrl
     }
   }
 
