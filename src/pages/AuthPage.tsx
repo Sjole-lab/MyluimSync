@@ -112,7 +112,19 @@ function AuthPage() {
           return
         }
 
-        const { data: authData, error: authError } = await supabase.auth.signUp({ email, password })
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+            email,
+            password,
+            options: {
+              data: {
+                full_name: fullName.trim(),
+                role: selectedRole,
+                faculty,
+                specialization,
+                year_of_study: Number(yearOfStudy),
+              }
+            }
+          })
 
         if (authError) {
           setMsg({ text: translateSupabaseError(authError.message), type: 'error' })
