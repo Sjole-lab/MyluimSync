@@ -24,6 +24,8 @@ function App() {
   const [profile, setProfile] = useState<UserProfile>({
     role: null, faculty: null, specialization: null, year_of_study: null
   })
+  const [profileLoaded, setProfileLoaded] = useState(false)   // סיים לטעון
+  const [profileMissing, setProfileMissing] = useState(false) // פרופיל לא קיים
   const [showCourseModal, setShowCourseModal] = useState(false)
   const fetchingRef = useRef<string | null>(null) // מונע קריאה כפולה
 
@@ -33,6 +35,8 @@ function App() {
 
       if (!newSession) {
         setProfile({ role: null, faculty: null, specialization: null, year_of_study: null })
+        setProfileLoaded(false)
+        setProfileMissing(false)
         setShowCourseModal(false)
         fetchingRef.current = null
         return
@@ -47,9 +51,18 @@ function App() {
         .from('profiles')
         .select('role, faculty, specialization, year_of_study')
         .eq('id', userId)
-        .single()
+        .maybeSingle()                           // לא זורק שגיאה אם אין שורה
         .then(async ({ data, error }) => {
           if (error) { console.error('Error fetching profile:', error); return }
+          if (!data) {
+            // פרופיל לא קיים — כנראה נוצר לפני שה-trigger/policy הוגדרו
+            console.warn('Profile not found for user:', userId)
+            setProfile({ role: null, faculty: null, specialization: null, year_of_study: null })
+            setProfileMissing(true)
+            setProfileLoaded(true)
+            fetchingRef.current = null
+            return
+          }
 
           const userProfile: UserProfile = {
             role: data?.role ?? null,
@@ -58,6 +71,8 @@ function App() {
             year_of_study: data?.year_of_study ?? null,
           }
           setProfile(userProfile)
+          setProfileLoaded(true)
+          setProfileMissing(false)
 
           // בדוק אם חייל מילואים שלא בחר קורסים עדיין
           if (userProfile.role === 'miluimnik') {
@@ -77,7 +92,7 @@ function App() {
     return () => subscription.unsubscribe()
   }, [])
 
-  // טרם הגיעה תשובה מ-Supabase
+  // טרם הגיעה תשובה מסופרביס
   if (session === undefined) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', direction: 'rtl', fontFamily: 'sans-serif' }}>
@@ -86,8 +101,29 @@ function App() {
     )
   }
 
-  // יש session אבל role עדיין נטען — ממתינים לפני ניווט
-  const roleLoading = session && profile.role === null
+  // פרופיל לא נמצא ב-DB — הצג מסך ידידותי במקום להיתקע
+  if (profileMissing && session) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh', direction: 'rtl', fontFamily: 'sans-serif', gap: '16px', padding: '24px', textAlign: 'center' }}>
+        <div style={{ fontSize: '48px' }}>⚠️</div>
+        <h2 style={{ color: '#1e3a8a' }}>פרופיל לא נמצא</h2>
+        <p style={{ color: '#64748b', maxWidth: '360px', lineHeight: '1.6' }}>
+          החשבון שלך קיים אך הפרופיל לא נשמר כראוי. זה יקרה כי הרשמת התבצעה לפני שהמסד הוגדרעו.
+          <br /><br />
+          <strong>בקש צור קשר עם מנהל המערכת או צא והירשם מחדש.</strong>
+        </p>
+        <button
+          onClick={() => supabase.auth.signOut()}
+          style={{ padding: '10px 24px', background: '#1e3a8a', color: '#fff', border: 'none', borderRadius: '10px', fontSize: '15px', fontWeight: 700, cursor: 'pointer' }}
+        >
+          יציאה מהמערכת
+        </button>
+      </div>
+    )
+  }
+
+  // יש session אבל פרופיל עדיין נטען — ממתינים לפני ניווט
+  const roleLoading = session && !profileLoaded
 
   return (
     <div className="app" style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
